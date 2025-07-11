@@ -1,0 +1,27 @@
+opencv-python
+pytest
+pillow
+matplotlib
+tqdm
+beautifulsoup4
+scikit-learn
+pandas
+tabulate
+XlsxWriter
+absl-py
+imgaug
+wandb
+tensorflow-addons
+ray[tune]
+hyperopt
+pytorch-lightning
+lightning-bolts
+tensorflow-probability==0.16.0
+seaborn
+latex
+
+# transformers
+transformers
+datasets
+torchinfo
+requests
