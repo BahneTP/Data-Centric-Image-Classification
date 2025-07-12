@@ -32,7 +32,7 @@ class ImageDataset(Dataset):
 
 class ActiveLearning(AlgorithmSkelton):
     def __init__(self):
-        name = "active_cluster_ssl"
+        name = "active_cluster_ssl_init"
         AlgorithmSkelton.__init__(self, name)
 
         model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
@@ -70,12 +70,13 @@ class ActiveLearning(AlgorithmSkelton):
             
     # 1. Setup
             nc = len(dataset_info.classes)  # Number of classes.
-            p = 3                           # How often to label one image.
-            k_clusters = nc*1               # Number of clusters for kmeans.
-            n_query=50
-
+            p = 2                           # How often to label one image.
+            k_clusters = nc*3               # Number of clusters for kmeans.
             unlabeled_paths, _ = ds.get_training_subsets('unlabeled')
             test_paths, _ = ds.get_training_subsets('test')
+            n_query=len(unlabeled_paths) // (p)#*k_clusters)
+
+            print(f'n_query: {n_query}')
 
     # 2. Initialisation
             
@@ -121,14 +122,16 @@ class ActiveLearning(AlgorithmSkelton):
                     ds.update_image(path, org_split, oracle_label)
                     labeled += 1
 
-    # 3. Method
+    # 3. Method Here we skip the method part.
+
 
                 else:
-                    distances = np.linalg.norm(cluster_centers - features[i], axis=1)
-                    similarities = 1 / (distances + 1e-8)
-                    pseudo_label = similarities / np.sum(similarities)
-                    ds.update_image(path, org_split, pseudo_label.tolist())
-                    pseudos += 1
+                    # distances = np.linalg.norm(cluster_centers - features[i], axis=1)
+                    # similarities = 1 / (distances + 1e-8)
+                    # pseudo_label = similarities / np.sum(similarities)
+                    # ds.update_image(path, org_split, pseudo_label.tolist())
+                    # pseudos += 1
+                    pass
 
 
 ##############################################TODO
@@ -136,7 +139,7 @@ class ActiveLearning(AlgorithmSkelton):
             for path in test_paths:
                 split = ds.get(path, 'original_split')
                 if split == "test":
-                    ds.update_image(path, split, nc * [0])
+                    # ds.update_image(path, split, nc * [0])
                     test += 1
 
             print(f"Active Learning: {labeled} queried. Test: {test}. Pseudos: {pseudos}")
