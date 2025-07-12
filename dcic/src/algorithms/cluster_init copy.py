@@ -3,9 +3,12 @@ from src.algorithms.common.algorithm_skeleton import AlgorithmSkelton
 import logging
 import traceback
 import numpy as np
-import torch
 import torchvision.models as models
 import torchvision.transforms as transforms
+import torch.nn as nn
+import torch
+import torch.optim as optim
+import torch.nn.functional as F
 from PIL import Image
 import numpy as np
 import torchvision.models as models
@@ -30,9 +33,9 @@ class ImageDataset(Dataset):
         return self.transform(image)
 
 
-class ActiveLearning(AlgorithmSkelton):
+class ActiveClusterSSL(AlgorithmSkelton):
     def __init__(self):
-        name = "cluster_init"
+        name = "active_cluster_ssl"
         AlgorithmSkelton.__init__(self, name)
 
         model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
@@ -70,14 +73,13 @@ class ActiveLearning(AlgorithmSkelton):
             
     # 1. Setup
             unlabeled_paths, _ = ds.get_training_subsets('unlabeled')
-            n = len(unlabeled_paths)
             test_paths, _ = ds.get_training_subsets('test')
-
+            init_percentage = 0.2
             nc = len(dataset_info.classes)  # Number of classes.
-            p = math.ceil(nc/2)                           # How often to label one image.
-            k_clusters = math.ceil(math.sqrt(n)/2)*nc               # Number of clusters for kmeans.
+            p = 3                           # How often to label one image.
+            k_clusters = 2*nc#len(unlabeled_paths) // p               # Number of clusters for kmeans.
 
-            n_query=len(unlabeled_paths) // p
+            n_query=len(unlabeled_paths) // p#p
 
             print(f'n_query: {n_query}')
 
@@ -117,32 +119,26 @@ class ActiveLearning(AlgorithmSkelton):
 
             pseudos=0
             labeled=0
-            oracle_count=0
 
             for i, path in enumerate(unlabeled_paths):
                 org_split = ds.get(path, 'original_split')
                 if i in top_n_idx:
                     oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
-                    oracle_count+=p
                     ds.update_image(path, org_split, oracle_label)
                     labeled += 1
-             
-            for i, path in enumerate(unlabeled_paths):
-                if (oracle_count/n)<1.0:       
-                    if not i in top_n_idx:
-                        if (n-oracle_count) < p:
-                            p=1
-                        oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
-                        oracle_count+=p
-                        ds.update_image(path, org_split, oracle_label)
-                        labeled += 1
                 else:
-                    break
+                    pass
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-
-    # 3. Method Here we skip the method part.
-
+                # else:
+                #     # distances = np.linalg.norm(cluster_centers - features[i], axis=1)
+                #     # similarities = 1 / (distances + 1e-8)
+                #     # pseudo_label = similarities / np.sum(similarities)
+                #     # ds.update_image(path, org_split, pseudo_label.tolist())
+                #     # pseudos += 1
+                #     pass
 
 
 ##############################################
@@ -204,7 +200,7 @@ def plot(features, top_n_idx, cluster_labels, dataset_name):
 
 
 def main(argv):
-    alg = ActiveLearning()
+    alg = ActiveClusterSSL()
     alg.apply_algorithm()
     alg.report.show()
 

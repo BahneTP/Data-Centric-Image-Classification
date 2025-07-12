@@ -346,7 +346,7 @@ def main(argv):
                         di = get_all_dataset_infos()[dataset_name]
 
                         # default parameters for evaluation
-                        config = {'batch_size':di.hyperparameters['batch_size'], 'epochs':20, 'lr':di.hyperparameters['lr'], 'weights':di.hyperparameters['weights'],
+                        config = {'batch_size':di.hyperparameters['batch_size'], 'epochs':10, 'lr':di.hyperparameters['lr'], 'weights':di.hyperparameters['weights'],
                                   'dropout':di.hyperparameters['dropout'], 'network':di.hyperparameters['network'], 'augmentation':di.hyperparameters['augmentation'],
                                   'use_class_weights':True,'num_slices':num_slices, 'folder':folder,
                                   'mode':mode, 'file':f,  'opt': di.hyperparameters['opt'], 'input_upsampling':di.hyperparameters['input_upsampling'], 'weight_decay': di.hyperparameters['weight_decay'],
