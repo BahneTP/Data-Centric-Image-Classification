@@ -55,9 +55,7 @@ class ActiveLearning(AlgorithmSkelton):
             pseudos=0
             labeled=0
             
-            print(f'\n DATASETNAME:\n{dataset_info.name}\n')
             num_images = len(ds.get_training_subsets('unlabeled')[0])
-            print(f'num_images:: {num_images}')
             
             k = len(dataset_info.classes)  # Anzahl Klassen
             p = max(2, math.ceil(1 * math.log2(k)))           # Wie oft top n Bild labeln.
@@ -77,7 +75,7 @@ class ActiveLearning(AlgorithmSkelton):
                     unlabeled_paths.append(path)
 
             print(f'Starting extracting features with DataLoader.\n')
-            dataset = ImageDataset(unlabeled_paths, self.transform, "/workspace/raw_datasets/")
+            dataset = ImageDataset(unlabeled_paths, self.transform, "/workspace/Data-Centric-Image-Classification/raw_datasets/")
             loader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=4)
 
             features = []
@@ -93,7 +91,6 @@ class ActiveLearning(AlgorithmSkelton):
                     print(f'{i}/{len(loader)}')
 
             features = np.concatenate(features, axis=0)
-            print(f'Finished extracting features.\n')
 
             cluster_center = np.mean(features, axis=0)
             dists = np.linalg.norm(features - cluster_center, axis=1)
@@ -115,7 +112,6 @@ class ActiveLearning(AlgorithmSkelton):
                     labeled += 1
                 else:
 
-                    print(f'Starting the Pseudo-Labeling')
         # ECHTES Pseudo-Labeling: Soft Label basierend auf Distanz zu allen Zentren
                     distances = np.linalg.norm(cluster_centers - features[i], axis=1)
                     similarities = 1 / (distances + 1e-8)
@@ -133,10 +129,10 @@ class ActiveLearning(AlgorithmSkelton):
                     test += 1
 
             print(f"Active Learning: {labeled} queried. Test: {test}. Pseudos: {pseudos}")
+            plot(features, top_n_idx, dataset_info.name)
 
         except Exception:
             logging.error(traceback.format_exc())
-        plot(features, top_n_idx, dataset_info.name)
         return ds
 
 def plot(features, top_n_idx, dataset_name):
@@ -163,7 +159,7 @@ def plot(features, top_n_idx, dataset_name):
     plt.grid(True)
     # plt.show()
 
-    plt.savefig(f"/workspace/images/{str(dataset_name)}_pca.png", bbox_inches='tight', dpi=300)
+    plt.savefig(f"/workspace/Data-Centric-Image-Classification/images/{str(dataset_name)}_pca.png", bbox_inches='tight', dpi=300)
     plt.close()
 
 def main(argv):
