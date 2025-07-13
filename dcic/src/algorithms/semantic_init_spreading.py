@@ -16,6 +16,7 @@ import math
 from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 from sklearn.semi_supervised import LabelSpreading
+from scipy.special import rel_entr  # Für KL-Divergenz
 
 class ImageDataset(Dataset):
     def __init__(self, paths, transform, root):
@@ -32,9 +33,9 @@ class ImageDataset(Dataset):
         return self.transform(image)
 
 
-class TestInitSpreading(AlgorithmSkelton):
+class SemanticInitSpreading(AlgorithmSkelton):
     def __init__(self):
-        name = "testdata_init_spreading"
+        name = "semantic_init_spreading"
         AlgorithmSkelton.__init__(self, name)
 
         # ##### ResNet50
@@ -75,98 +76,95 @@ class TestInitSpreading(AlgorithmSkelton):
             
     # 1. Setup
             unlabeled_paths, _ = ds.get_training_subsets('unlabeled')
-            test_paths, _ = ds.get_training_subsets('test')
             all_paths, _ = ds.get_training_subsets('all')
             n_unlabeled = len(unlabeled_paths)
             n_all = len(all_paths)
-            n_test = len(test_paths)
             n_init = int(1*n_unlabeled)
             n_active = 1-n_init
 
             nc = len(dataset_info.classes)  # Number of classes.
             p = 2                           # How often to label one image.
-            k_nearest = 2
+            k_clusters = nc*4               # Number of clusters for kmeans.
+            k_cluster_call = n_init // (k_clusters*p)
+
+            print(f'total: {k_cluster_call*k_cluster_call*p}')
+            
 
             alpha = 0.2                     #Small: Labels tend to stay the same
             gamma = 0                       #Small: Global...
-
-            k_clusters = nc*4               # Number of clusters for kmeans.
 
             # p_dict = {2: 2, 6: 2, 8: 2, 3:2}  # This could be used to select the right number of Labels
                                                 # per image, for the respective model. My quick 
                                                 # Hyperparameter search found this to be the best.
 
-            print(f'n_all: {n_all}, n_unlabeled: {n_unlabeled}, n_test: {n_test}')
+            print(f'n_all: {n_all}, n_unlabeled: {n_unlabeled}, k_cluster_call: {k_cluster_call}')
 
-    # 2. Initialisation
-            budget=0                        # Counter.
-            labeled_paths = []
+            # 2. Initialisation
+            budget = n_unlabeled                        # Counter.
+            labeled_paths = set()             # als Set für schnelleres Suchen!
 
-        # 2.1 Extracting the features.
-            features_all = self.extractFeatures(unlabeled_paths=all_paths)
-            features_unlabeled = features_all[:n_unlabeled]
-            features_test = features_all[n_unlabeled:n_unlabeled+n_test]
+            # 2.1 Extracting the features.
+            features = self.extractFeatures(unlabeled_paths=unlabeled_paths)
 
-        # 2.2 Getting labels close to test data
-            unlabeled_to_all = {path: idx for idx, path in enumerate(all_paths) if path in set(unlabeled_paths)}
+            # 2.3 KMeans Clustering
+            kmeans = KMeans(n_clusters=k_clusters, random_state=0).fit(features)
+            cluster_labels = kmeans.labels_
+            cluster_centers = kmeans.cluster_centers_
 
+            # 2.4 Get Center Images per Cluster
             top_n_idx = set()
+            for cluster_id in range(k_clusters):
+                indices = [i for i, lbl in enumerate(cluster_labels) if lbl == cluster_id]
+                if not indices:
+                    continue
+                # Distances to centers.
+                cluster_feats = features[indices]
+                center = cluster_centers[cluster_id]
+                dists = np.linalg.norm(cluster_feats - center, axis=1)
+                sorted_indices = np.argsort(dists)
+                num = len(sorted_indices)
+                if num < k_cluster_call:
+                    chosen = sorted_indices  # All, if not enough
+                else:
+                    mid = num // 2
+                    half = k_cluster_call // 2
+                    if k_cluster_call % 2 == 0:
+                        chosen = sorted_indices[mid-half:mid+half]
+                    else:
+                        chosen = sorted_indices[mid-half:mid+half+1]
 
-            for i, test_feat in enumerate(features_test):
-                dists = np.linalg.norm(features_unlabeled - test_feat, axis=1)
-                nearest = np.argsort(dists)[:k_nearest]
-                for ni in nearest:
-                    path = unlabeled_paths[ni]
-
-                    if budget == n_unlabeled or path in labeled_paths:
-                        continue
-                    
-                    abs_idx = unlabeled_to_all[path]
-                    top_n_idx.add(abs_idx)
-                    budget+=p
-                    labeled_paths.append(path)
-            print(f'budget after test-init: {budget/n_unlabeled}')
-
-        # 2.3 KMeans Clustering
-            # kmeans = KMeans(n_clusters=k_clusters, random_state=0).fit(features_all)
-            # cluster_labels = kmeans.labels_
-            # cluster_centers =  kmeans.cluster_centers_
-
-        # 2.4 Using the last Budget
-            k=k_nearest +4
-            for i, test_feat in enumerate(features_test):
-                if budget >= n_unlabeled:
-                    break
-                k+=1
-                dists = np.linalg.norm(features_unlabeled - test_feat, axis=1)
-                next_nearest = np.argsort(dists)[k:k+3]
-
-                for ni in next_nearest:
-                    path = unlabeled_paths[ni]
+                for idx_in_cluster in chosen:
+                    global_idx = indices[idx_in_cluster]
+                    path = unlabeled_paths[global_idx]
                     if path in labeled_paths:
                         continue
-                    if p > n_unlabeled-budget and (p!=1):
+                    top_n_idx.add(global_idx)
+                    labeled_paths.add(path)
+                    budget-=p
+
+            print(f'budget after cluster_init: {len(top_n_idx)*p/n_unlabeled:.3f}')
+
+            # Rest of Budget.
+
+            for i in range(len(unlabeled_paths)):
+                if budget > 0:
+                    if p > budget:
                         break
+                    path = unlabeled_paths[i]
+                    if path in labeled_paths:
+                        continue
+                    top_n_idx.add(i)
+                    labeled_paths.add(path)
+                    budget-=p
 
-                    abs_idx = unlabeled_to_all[path]
-                    top_n_idx.add(abs_idx)
-                    budget+=p
-                    labeled_paths.append(path)
 
-                    if budget >= n_unlabeled:
-                        break
-
-            print(f'budget after "Using the last Budget": {budget/n_unlabeled}')
-
-        # 2.5 Calling the oracle.
-
+            # 2.5 Asking the Oracle
             labeled_indices = []
             labeled_labels = []
-            pseudos = 0
             oracle_count = 0
             labeled = 0
             for i in top_n_idx:
-                path = all_paths[i]
+                path = unlabeled_paths[i]
                 org_split = ds.get(path, 'original_split')
                 oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
                 oracle_count += p
@@ -174,23 +172,24 @@ class TestInitSpreading(AlgorithmSkelton):
                 labeled += 1
                 labeled_indices.append(i)
                 labeled_labels.append(oracle_label)
-            print(f'oracle_count: {oracle_count/n_unlabeled}')
+            print(f'oracle_count: {oracle_count/n_unlabeled:.3f}')
     
 
     # 3. Method Here we skip the method part.
 
 
     # 4. Label Spreading
-            int_labels = np.full(n_all, -1)
+            pseudos=0
+            int_labels = np.full(n_unlabeled, -1)
             for idx, lbl in zip(labeled_indices, labeled_labels):
                 int_labels[idx] = int(np.argmax(lbl))
 
 
             label_spread = LabelSpreading(kernel='rbf', alpha=alpha, max_iter=40, gamma=gamma)
-            label_spread.fit(features_all, int_labels)
+            label_spread.fit(features, int_labels)
             probas = label_spread.label_distributions_
 
-            for i, path in enumerate(all_paths):
+            for i, path in enumerate(unlabeled_paths):
                 if i not in labeled_indices:
                     org_split = ds.get(path, 'original_split')
                     pseudo_label = list(map(float, probas[i]))
@@ -201,7 +200,7 @@ class TestInitSpreading(AlgorithmSkelton):
             print("First 10 probas:", probas[:10])
 
             print(f"Active Learning: {labeled} queried. Pseudos: {pseudos}")
-            # plot(features_all, top_n_idx, cluster_labels, dataset_info.name)
+            plot(features, top_n_idx, cluster_labels, dataset_info.name)
 
         except Exception:
             logging.error(traceback.format_exc())
@@ -251,7 +250,7 @@ def plot(features, top_n_idx, cluster_labels, dataset_name):
 
 
 def main(argv):
-    alg = TestInitSpreading()
+    alg = SemanticInitSpreading()
     alg.apply_algorithm()
     alg.report.show()
 
