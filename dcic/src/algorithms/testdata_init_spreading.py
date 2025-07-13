@@ -85,10 +85,14 @@ class TestInitSpreading(AlgorithmSkelton):
 
             nc = len(dataset_info.classes)  # Number of classes.
             p = 2                           # How often to label one image.
-            k_nearest = 2#(1/0.25)//p
+            k_nearest = 2
+
+            alpha = 0.2                     #Small: Labels tend to stay the same
+            gamma = 0                     #Small: Global...
+
             k_clusters = nc*4               # Number of clusters for kmeans.
 
-            # p_dict = {2: 2, 6: 2, 8:,1:}
+            # p_dict = {2: 2, 6: 2, 8: 2, 3:2}
 
             print(f'n_all: {n_all}, n_unlabeled: {n_unlabeled}, n_test: {n_test}')
 
@@ -180,7 +184,7 @@ class TestInitSpreading(AlgorithmSkelton):
                 int_labels[idx] = int(np.argmax(lbl))
 
 
-            label_spread = LabelSpreading(kernel='rbf', alpha=0.2, max_iter=40, gamma=0.01)
+            label_spread = LabelSpreading(kernel='rbf', alpha=alpha, max_iter=40, gamma=gamma)
             label_spread.fit(features_all, int_labels)
             probas = label_spread.label_distributions_
 
