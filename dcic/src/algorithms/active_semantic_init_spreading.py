@@ -17,6 +17,8 @@ from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 from sklearn.semi_supervised import LabelSpreading
 from scipy.special import rel_entr  # Für KL-Divergenz
+import numpy as np
+from scipy.stats import entropy  # für KL
 
 class ImageDataset(Dataset):
     def __init__(self, paths, transform, root):
@@ -79,12 +81,12 @@ class ActiveSemanticInitSpreading(AlgorithmSkelton):
             all_paths, _ = ds.get_training_subsets('all')
             n_unlabeled = len(unlabeled_paths)
             n_all = len(all_paths)
-            n_init = int(0.4*n_unlabeled)
+            n_init = int(1*n_unlabeled)
             n_active = 1-n_init
 
             nc = len(dataset_info.classes)  # Number of classes.
             p = 2                           # How often to label one image.
-            k_clusters = nc*4               # Number of clusters for kmeans.
+            k_clusters = nc*5               # Number of clusters for kmeans.
             k_cluster_call = n_init // (k_clusters*p)
 
             print(f'total: {k_cluster_call*k_cluster_call*p}')
@@ -140,7 +142,7 @@ class ActiveSemanticInitSpreading(AlgorithmSkelton):
                         continue
                     top_n_idx.add(global_idx)
                     labeled_paths.add(path)
-                    budget-=1
+                    budget-=p
 
             print(f'budget after cluster_init: {len(top_n_idx)*p/n_unlabeled:.3f}')
 
@@ -159,66 +161,6 @@ class ActiveSemanticInitSpreading(AlgorithmSkelton):
                 labeled_indices.append(i)
                 labeled_labels.append(oracle_label)
             print(f'oracle_count: {oracle_count/n_unlabeled:.3f}')
-
-
-            # max_active_iterations = 5  # oder so viele wie du Budget hast
-
-            # for active_iter in range(max_active_iterations):
-            #     added = 0
-            #     for cluster_id in range(k_clusters):
-            #         # Finde alle Indizes dieses Clusters, die noch NICHT gelabelt wurden
-            #         indices = [i for i, lbl in enumerate(cluster_labels) if lbl == cluster_id and unlabeled_paths[i] not in labeled_paths]
-            #         if len(indices) < 2:
-            #             continue
-
-            #         # Für diese Indices: Features holen
-            #         cluster_feats = features[indices]
-
-            #         # Hole für alle schon gelabelten aus diesem Cluster deren Softlabels (bzw. Pseudo-Labels, falls schon spreaded)
-            #         already_labeled = [i for i, lbl in enumerate(cluster_labels) if lbl == cluster_id and unlabeled_paths[i] in labeled_paths]
-            #         if not already_labeled:
-            #             continue  # Falls noch kein einziges Label, kann keine Verteilung gebildet werden
-            #             print("NOOOOOOOOO")
-
-            #         # Berechne Mittelwert-Verteilung des Clusters
-            #         cluster_label_vectors = []
-            #         for i in already_labeled:
-            #             # Hier erwarten wir, dass die Labels als Softlabel im ds stehen (Shape = [nc])
-            #             y = ds.get(unlabeled_paths[i], "labels")
-            #             cluster_label_vectors.append(np.array(y))
-            #         cluster_mean = np.mean(cluster_label_vectors, axis=0)
-            #         cluster_mean = np.clip(cluster_mean, 1e-8, 1.0)  # Für sichere Division im KL
-
-            #         # Für alle unlabelten Kandidaten: KL-Divergenz zum Cluster-Mean berechnen
-            #         kls = []
-            #         for i in indices:
-            #             # Hole Pseudo-Label, falls schon eins existiert, ansonsten gleichmäßige Verteilung
-            #             y = ds.get(unlabeled_paths[i], "labels")
-            #             if y is None or sum(y)==0:
-            #                 y = np.ones(nc) / nc
-            #             y = np.clip(np.array(y), 1e-8, 1.0)
-            #             kl = np.sum(rel_entr(y, cluster_mean))  # KL(y || cluster_mean)
-            #             kls.append((kl, i))
-
-            #         # Sortiere nach KL und wähle die Top 2
-            #         kls.sort(reverse=True)
-            #         for kl_value, i in kls[:2]:
-            #             path = unlabeled_paths[i]
-            #             if path in labeled_paths:
-            #                 continue
-            #             org_split = ds.get(path, 'original_split')
-            #             oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
-            #             ds.update_image(path, org_split, oracle_label)
-            #             labeled_paths.add(path)
-            #             labeled_indices.append(i)
-            #             labeled_labels.append(oracle_label)
-            #             oracle_count += p
-            #             labeled += 1
-            #             added += 1
-            #     print(f"[Active {active_iter+1}] New labels added: {added}, Gesamt Oracle count: {oracle_count/n_unlabeled:.3f}")
-            #     if added == 0:
-            #         print("[Active] Keine neuen Labels mehr, breche ab.")
-            #         break
     
 
     # 3. Method Here we skip the method part.
@@ -242,11 +184,59 @@ class ActiveSemanticInitSpreading(AlgorithmSkelton):
                     # print(pseudo_label)
                     ds.update_image(path, org_split, pseudo_label)
                     pseudos += 1
-                    
-            print("First 10 probas:", probas[:10])
 
-            print(f"Active Learning: {labeled} queried. Pseudos: {pseudos}")
-            plot(features, top_n_idx, cluster_labels, dataset_info.name)
+            # # 3. Active Labeling mit KL Divergenz pro Cluster
+            # n_query_per_cluster = 3
+            # kl_oracle_indices = set()  # Welche wurden jetzt im Active Step gelabelt
+
+            # while budget > 0:
+            #     print("budget passt.")
+            #     added_any = False
+            #     for cluster_id in range(k_clusters):
+            #         # Finde alle Indizes dieses Clusters, die noch nicht gelabelt wurden
+            #         indices = [i for i, lbl in enumerate(cluster_labels)
+            #                 if lbl == cluster_id and i not in labeled_indices and i not in kl_oracle_indices]
+
+            #         if len(indices) == 0:
+            #             continue
+
+            #         # Hole die aktuellen Pseudo-Labels dieser Cluster-Elemente
+            #         cluster_probas = probas[indices]  # Shape: (n_in_cluster, n_classes)
+            #         # “Cluster Mean” als Referenz
+            #         cluster_mean = cluster_probas.mean(axis=0) + 1e-8  # (numerische Stabilität)
+
+            #         # KL-Divergenz jedes Bildes zum Cluster-Mittel berechnen
+            #         kl_divs = [entropy(proba, cluster_mean) for proba in cluster_probas]  # Shape: (n_in_cluster,)
+            #         kl_divs = np.array(kl_divs)
+            #         # Top n_query_per_cluster auswählen (höchste KL)
+            #         topk = np.argsort(-kl_divs)[:n_query_per_cluster]
+
+            #         # Wenn Budget nicht reicht, brich ab
+            #         n_queries = min(n_query_per_cluster, len(topk), budget//p)
+            #         if n_queries == 0:
+            #             continue
+
+            #         for idx_in_cluster in topk[:n_queries]:
+            #             if budget < p or budget <=0:
+            #                 break
+            #             print("fragen")
+            #             global_idx = indices[idx_in_cluster]
+            #             path = unlabeled_paths[global_idx]
+            #             org_split = ds.get(path, 'original_split')
+            #             oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
+            #             ds.update_image(path, org_split, oracle_label)
+            #             labeled_indices.append(global_idx)
+            #             labeled_labels.append(oracle_label)
+            #             kl_oracle_indices.add(global_idx)
+            #             budget -= p
+            #             added_any = True
+
+            #     # Wenn keine neuen Queries, break
+            #     if not added_any:
+            #         break
+
+            # print(f'Active queries via KL: {len(kl_oracle_indices)}')
+
 
         except Exception:
             logging.error(traceback.format_exc())

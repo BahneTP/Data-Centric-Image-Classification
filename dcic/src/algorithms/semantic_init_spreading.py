@@ -84,18 +84,13 @@ class SemanticInitSpreading(AlgorithmSkelton):
 
             nc = len(dataset_info.classes)  # Number of classes.
             p = 2                           # How often to label one image.
-            k_clusters = nc*4               # Number of clusters for kmeans.
+            k_clusters = n_unlabeled // p               # Number of clusters for kmeans.
             k_cluster_call = n_init // (k_clusters*p)
 
-            print(f'total: {k_cluster_call*k_cluster_call*p}')
-            
-
             alpha = 0.2                     #Small: Labels tend to stay the same
-            gamma = 0                       #Small: Global...
-
-            # p_dict = {2: 2, 6: 2, 8: 2, 3:2}  # This could be used to select the right number of Labels
-                                                # per image, for the respective model. My quick 
-                                                # Hyperparameter search found this to be the best.
+            gamma = 0.01                       #Small: Global...
+            
+            print(k_clusters)
 
             print(f'n_all: {n_all}, n_unlabeled: {n_unlabeled}, k_cluster_call: {k_cluster_call}')
 
@@ -196,6 +191,8 @@ class SemanticInitSpreading(AlgorithmSkelton):
                     # print(pseudo_label)
                     ds.update_image(path, org_split, pseudo_label)
                     pseudos += 1
+
+        
                     
             print("First 10 probas:", probas[:10])
 
