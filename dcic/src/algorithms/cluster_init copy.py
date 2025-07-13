@@ -77,9 +77,9 @@ class ActiveClusterSSL(AlgorithmSkelton):
             init_percentage = 0.2
             nc = len(dataset_info.classes)  # Number of classes.
             p = 3                           # How often to label one image.
-            k_clusters = 2*nc#len(unlabeled_paths) // p               # Number of clusters for kmeans.
+            k_clusters = 2*nc               # Number of clusters for kmeans.
 
-            n_query=len(unlabeled_paths) // p#p
+            n_query=len(unlabeled_paths) // p
 
             print(f'n_query: {n_query}')
 

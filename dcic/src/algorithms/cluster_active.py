@@ -15,6 +15,10 @@ from sklearn.cluster import KMeans
 import math
 from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
+from sklearn.linear_model import LogisticRegression
+from scipy.special import softmax
+from scipy.stats import entropy  # KL divergence
+
 
 class ImageDataset(Dataset):
     def __init__(self, paths, transform, root):
@@ -36,26 +40,10 @@ class ClusterInit(AlgorithmSkelton):
         name = "cluster_init"
         AlgorithmSkelton.__init__(self, name)
 
-        """
-        EfficientNet
-        Download https://download.pytorch.org/models/efficientnet_b0_rwightman-3dd342df.pth
-        and do:
-        mv /workspace/efficientnet_b0_rwightman-3dd342df.pth /root/.cache/torch/hub/checkpoints/
-        """
-        # model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
-        # model.eval()
-        # self.model = torch.nn.Sequential(
-        #     model.features,
-        #     torch.nn.AdaptiveAvgPool2d(1),
-        # )
-        # weights = EfficientNet_B0_Weights.DEFAULT
-        # self.transform = weights.transforms()
-
         # ##### ResNet50
         weights = ResNet50_Weights.DEFAULT
         model = resnet50(weights=weights)
         model.eval()
-        # Alles bis zum avgpool nehmen und flatten:
         self.model = torch.nn.Sequential(
             *(list(model.children())[:-1])  # Bis einschließlich avgpool
         )
@@ -89,13 +77,14 @@ class ClusterInit(AlgorithmSkelton):
     # 1. Setup
             unlabeled_paths, _ = ds.get_training_subsets('unlabeled')
             n = len(unlabeled_paths)
+            n_init = int(0.5*n)
             test_paths, _ = ds.get_training_subsets('test')
 
-            nc = len(dataset_info.classes)  # Number of classes.
-            p = math.ceil(nc/2)                           # How often to label one image.
-            k_clusters = nc*5#math.ceil(math.sqrt(n)/2)*nc               # Number of clusters for kmeans.
+            nc = len(dataset_info.classes)      # Number of classes.
+            p = 5#math.ceil(nc/2)                 # How often to label one image.
+            k_clusters = 2#nc*5                   # Number of clusters for kmeans.
 
-            n_query=len(unlabeled_paths) // p
+            n_query=n_init // p
 
             print(f'n_query: {n_query}')
 
@@ -143,17 +132,90 @@ class ClusterInit(AlgorithmSkelton):
                     ds.update_image(path, org_split, oracle_label)
                     labeled += 1
              
+
+
+            # Features, cluster_labels, cluster_centers sind schon berechnet
+
+            # Masken für Label-Status
+            labeled_mask = np.zeros(n, dtype=bool)
+            labeled_mask[top_n_idx] = True
+
+            # Dummy-Labels initialisieren (du hast ja erst nur die aus top_n_idx)
+            labels = np.zeros((n, nc))
             for i, path in enumerate(unlabeled_paths):
-                if (oracle_count/n)<1.0:       
-                    if not i in top_n_idx:
-                        if (n-oracle_count) < p:
-                            p=1
-                        oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
-                        oracle_count+=p
-                        ds.update_image(path, org_split, oracle_label)
-                        labeled += 1
-                else:
+                if labeled_mask[i]:
+                    labels[i] = ds.get(path, 'labels')  # Passe an, wie du ans Label kommst
+
+            budget = int(n * 0.5)  # z.B. voll ausreizen
+            query_batch_size = 5   # Pro Cluster pro Runde (nach Wunsch erhöhen)
+            max_iters = 1#int((budget - np.sum(labeled_mask)) // (k_clusters * query_batch_size))
+            print("maxiters")
+            print(max_iters)
+            
+            skips = 0
+            for al_iter in range(max_iters):
+                # 1. Trainiere Klassifikator auf aktuellen Labels (nur die, die gelabelt wurden)
+                X_labeled = features[labeled_mask]
+                y_labeled = labels[labeled_mask].argmax(axis=1)
+                if len(np.unique(y_labeled)) < 2:
+                    skips+=1
+                    continue
+
+                clf = LogisticRegression(max_iter=200, multi_class='multinomial', solver='lbfgs')
+                clf.fit(X_labeled, y_labeled)
+
+                # 2. Pro Cluster: wähle das Sample mit größter KL
+                query_indices = []
+                for cluster_id, indices in cluster_to_indices.items():
+                    # Nur ungelabelte im Cluster
+                    idxs_unlabeled = [i for i in indices if not labeled_mask[i]]
+                    if len(idxs_unlabeled) == 0:
+                        continue
+                    # Probs für Samples
+                    X_unlabeled = features[idxs_unlabeled]
+                    probs_samples = clf.predict_proba(X_unlabeled)
+                    # Prototyp-Feature (= Clusterzentrum) durch das Modell schicken:
+                    proto_prob = clf.predict_proba(cluster_centers[cluster_id].reshape(1,-1))[0]  # Shape (nc,)
+                    # KL-Divergenz für alle im Cluster
+                    kls = [entropy(ps, proto_prob) for ps in probs_samples]  # KL(P_sample || P_proto)
+                    # Index mit höchster KL
+                    topk = np.argsort(kls)[-query_batch_size:]
+                    to_query = [idxs_unlabeled[i] for i in topk]
+                    query_indices.extend(to_query)
+
+                # 3. Oracle abfragen
+                print(0)
+                for i in query_indices:
+                    print(1)
+                    path = unlabeled_paths[i]
+                    org_split = ds.get(path, 'original_split')
+                    oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
+                    ds.update_image(path, org_split, oracle_label)
+                    labels[i] = oracle_label
+                    labeled_mask[i] = True
+
+                print(f"Active-Labeling Iteration {al_iter+1}, Queried: {len(query_indices)} new, Total labeled: {labeled_mask.sum()}, skips: {skips}")
+
+                # Optional: Budget prüfen/abbrechen falls voll
+                if labeled_mask.sum() >= budget:
                     break
+            print("skips")
+            print(skips)
+
+
+
+
+            # for i, path in enumerate(unlabeled_paths):
+            #     if (oracle_count/n)<1.0:       
+            #         if not i in top_n_idx:
+            #             if (n-oracle_count) < p:
+            #                 p=1
+            #             oracle_label = [float(x) for x in oracle.get_soft_gt(path, p)]
+            #             oracle_count+=p
+            #             ds.update_image(path, org_split, oracle_label)
+            #             labeled += 1
+            #     else:
+            #         break
 
 
 
@@ -169,7 +231,6 @@ class ClusterInit(AlgorithmSkelton):
                     ds.update_image(path, split, nc * [0])
                     test += 1
 
-            print(f"Active Learning: {labeled} queried. Test: {test}. Pseudos: {pseudos}")
             plot(features, top_n_idx, cluster_labels, dataset_info.name)
 
         except Exception:
